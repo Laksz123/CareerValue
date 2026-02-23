@@ -3,7 +3,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.types import FSInputFile, InputMediaPhoto
 from utils.states import QuizStates
-from utils.db_api import get_or_create_user, update_user_survey, get_vacancies, get_setting
+from utils.db_api import get_or_create_user, get_user, update_user_survey, get_vacancies, get_setting
+from typing import Set, Tuple
 import random
 import asyncio
 
@@ -11,31 +12,36 @@ router = Router()
 
 @router.callback_query(F.data == "start_quiz")
 async def start_quiz(callback: types.CallbackQuery, state: FSMContext):
-    await get_or_create_user(
-        callback.from_user.id, 
-        callback.from_user.username, 
-        callback.from_user.full_name
-    )
-    
-    await callback.message.answer(
-        "🚀 Отлично!\n\n"
-        "Чтобы я рассчитал твою стоимость и подобрал подходящие вакансии, "
-        "ответь на 3 коротких вопроса.\n\n"
-        "⏳ Это займёт меньше 60 секунд\n"
-        "🎯 Ты получишь персональную подборку"
-    )
-    
-    builder = ReplyKeyboardBuilder()
-    builder.row(types.KeyboardButton(text="Москва"), types.KeyboardButton(text="Санкт-Петербург"))
-    builder.row(types.KeyboardButton(text="Екатеринбург"), types.KeyboardButton(text="Новосибирск"))
-    builder.row(types.KeyboardButton(text="🌍 Другой"))
-    
-    await callback.message.answer(
-        "📍 В каком городе ты ищешь работу?",
-        reply_markup=builder.as_markup(resize_keyboard=True)
-    )
-    await state.set_state(QuizStates.waiting_for_city)
-    await callback.answer()
+    chat_id = callback.message.chat.id
+    msg_id = callback.message.message_id
+    if not _acquire_callback(chat_id, msg_id):
+        await callback.answer()
+        return
+    try:
+        await get_or_create_user(
+            callback.from_user.id,
+            callback.from_user.username,
+            callback.from_user.full_name
+        )
+        await callback.message.answer(
+            "🚀 Отлично!\n\n"
+            "Чтобы я рассчитал твою стоимость и подобрал подходящие вакансии, "
+            "ответь на 3 коротких вопроса.\n\n"
+            "⏳ Это займёт меньше 60 секунд\n"
+            "🎯 Ты получишь персональную подборку"
+        )
+        builder = ReplyKeyboardBuilder()
+        builder.row(types.KeyboardButton(text="Москва"), types.KeyboardButton(text="Санкт-Петербург"))
+        builder.row(types.KeyboardButton(text="Екатеринбург"), types.KeyboardButton(text="Новосибирск"))
+        builder.row(types.KeyboardButton(text="🌍 Другой"))
+        await callback.message.answer(
+            "📍 В каком городе ты ищешь работу?",
+            reply_markup=builder.as_markup(resize_keyboard=True)
+        )
+        await state.set_state(QuizStates.waiting_for_city)
+        await callback.answer()
+    finally:
+        _release_callback(chat_id, msg_id)
 
 @router.message(QuizStates.waiting_for_city)
 async def process_city(message: types.Message, state: FSMContext):
@@ -113,15 +119,20 @@ async def process_experience(message: types.Message, state: FSMContext):
                 caption=new_caption
             )
         except Exception:
-            pass # Ignore errors during intermediate status updates
+            pass
 
-    await asyncio.sleep(random.uniform(0.7, 1.2))
-    await safe_edit_caption(analysis_msg, "📊 Сравниваю с 2 000+ вакансиями…")
-    
-    await asyncio.sleep(random.uniform(0.7, 1.2))
-    await safe_edit_caption(analysis_msg, "💰 Считаю твой потенциал…")
-    
-    await asyncio.sleep(random.uniform(1.0, 1.5))
+    loading_min = float(await get_setting("delay_loading_min", "0.7"))
+    loading_max = float(await get_setting("delay_loading_max", "1.2"))
+    text_1 = await get_setting("text_loading_1", "📊 Сравниваю с 2 000+ вакансиями…")
+    text_2 = await get_setting("text_loading_2", "💰 Считаю твой потенциал…")
+
+    await asyncio.sleep(random.uniform(loading_min, loading_max))
+    await safe_edit_caption(analysis_msg, text_1)
+
+    await asyncio.sleep(random.uniform(loading_min, loading_max))
+    await safe_edit_caption(analysis_msg, text_2)
+
+    await asyncio.sleep(random.uniform(loading_min, loading_max))
     
     # Calculate Result (Placeholder logic for now)
     base_salary = 80000
@@ -137,15 +148,22 @@ async def process_experience(message: types.Message, state: FSMContext):
     undervalued = 20
     career_index = random.randint(70, 85)
 
-    result_text = (
-        f"💰 Твоя рыночная стоимость: {market_value:,} ₽\n\n"
-        f"Но по текущим данным рынка ты можешь выйти на {potential_value:,} ₽ уже сейчас.\n\n"
-        f"Ты недооцениваешь себя примерно на {undervalued}%.\n\n"
-        f"📊 Твой карьерный индекс: {career_index} / 100\n\n"
-        f"До уровня {potential_value:,} ₽ тебе не хватает:\n"
+    result_template = await get_setting(
+        "text_result",
+        "💰 Твоя рыночная стоимость: {market_value} ₽\n\n"
+        "Но по текущим данным рынка ты можешь выйти на {potential_value} ₽ уже сейчас.\n\n"
+        "Ты недооцениваешь себя примерно на {undervalued}%.\n\n"
+        "📊 Твой карьерный индекс: {career_index} / 100\n\n"
+        "До уровня {potential_value} ₽ тебе не хватает:\n"
         "— более смелой планки по зарплате\n"
         "— откликов на вакансии уровнем выше"
-    ).replace(",", " ")
+    )
+    result_text = result_template.format(
+        market_value=f"{market_value:,}".replace(",", " "),
+        potential_value=f"{potential_value:,}".replace(",", " "),
+        career_index=career_index,
+        undervalued=undervalued,
+    )
     
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="🔥 Показать вакансии", callback_data="show_vacancies"))
@@ -160,115 +178,205 @@ async def process_experience(message: types.Message, state: FSMContext):
         test_completed=True
     )
 
-    # Change image to result and update caption
-    photo_result = FSInputFile("images/result.jpg")
+    # Delete loading message and send result as new message
     try:
-        await message.bot.edit_message_media(
-            chat_id=analysis_msg.chat.id,
-            message_id=analysis_msg.message_id,
-            media=InputMediaPhoto(media=photo_result, caption=result_text),
-            reply_markup=builder.as_markup()
-        )
+        await message.bot.delete_message(chat_id=analysis_msg.chat.id, message_id=analysis_msg.message_id)
     except Exception:
-        # Fallback if media edit fails
-        await message.answer_photo(
-            photo=photo_result,
-            caption=result_text,
-            reply_markup=builder.as_markup()
-        )
-    
+        pass
+    photo_result = FSInputFile("images/result.jpg")
+    await message.answer_photo(
+        photo=photo_result,
+        caption=result_text,
+        reply_markup=builder.as_markup()
+    )
     await state.clear()
 
 
 def normalize_url(url: str) -> str:
-    if not url:
-        return "https://t.me"
+    if not url or not url.strip():
+        return None
     url = url.strip()
     if url.startswith(("http://", "https://")):
         return url
-    # If it looks like a relative path or just a string, fallback to a safe URL
-    return "https://t.me"
+    return "https://" + url if "." in url else None
+
+
+# Protection from double-click: in-flight processing keys
+_processing_callbacks: Set[Tuple[int, int]] = set()
+
+
+def _acquire_callback(chat_id: int, message_id: int) -> bool:
+    key = (chat_id, message_id)
+    if key in _processing_callbacks:
+        return False
+    _processing_callbacks.add(key)
+    return True
+
+
+def _release_callback(chat_id: int, message_id: int):
+    _processing_callbacks.discard((chat_id, message_id))
+
 
 @router.callback_query(F.data == "show_vacancies")
 async def show_vacancies(callback: types.CallbackQuery):
-    photo_vacancies = FSInputFile("images/list of vacancies.jpg")
-    await callback.message.answer_photo(
-        photo=photo_vacancies,
-        caption="🔎 Ищу подходящие вакансии...\nЭто может занять немного времени ☕"
-    )
-    
-    vacs = await get_vacancies(3)
-    
-    if not vacs:
-        builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))
-        await callback.message.answer(
-            "К сожалению, подходящих вакансий пока нет. Загляните позже!",
-            reply_markup=builder.as_markup()
-        )
+    chat_id = callback.message.chat.id
+    msg_id = callback.message.message_id
+    if not _acquire_callback(chat_id, msg_id):
         await callback.answer()
         return
+    try:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.answer()
 
-    for i, v in enumerate(vacs):
-        # Typing action + delay to simulate search
-        await callback.message.bot.send_chat_action(
-            chat_id=callback.message.chat.id, action="typing"
-        )
-        await asyncio.sleep(random.uniform(5, 10))
+        vac_delay_min = float(await get_setting("delay_vacancy_min", "1.5"))
+        vac_delay_max = float(await get_setting("delay_vacancy_max", "3.0"))
 
-        salary_str = f"{v.salary_min or ''} - {v.salary_max or ''} ₽"
-        text = (
-            f"🔹 {v.title}\n"
-            f"🏢 Компания: {v.company}\n"
-            f"📍 Город: {v.city}\n"
-            f"💰 Зарплата: {salary_str}\n"
-            f"📝 Кратко: {v.description[:100]}...\n\n"
+        vacancy_intro = await get_setting(
+            "text_vacancy_intro",
+            "🔎 Нашёл {count} подходящих вакансий выше твоей текущей планки.\n\n"
         )
-        builder = InlineKeyboardBuilder()
-        valid_url = normalize_url(v.link)
-        builder.row(types.InlineKeyboardButton(text="👉 Подробнее", url=valid_url))
-        await callback.message.answer(text, reply_markup=builder.as_markup())
-    
-    # "Back to main menu" button after all vacancies
-    back_builder = InlineKeyboardBuilder()
-    back_builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))
-    await callback.message.answer(
-        "👆 Вот что я нашёл для тебя!",
-        reply_markup=back_builder.as_markup()
-    )
-    await callback.answer()
+        no_vacancies_text = await get_setting(
+            "text_no_vacancies",
+            "К сожалению, подходящих вакансий пока нет. Загляните позже!"
+        )
+
+        user = await get_user(callback.from_user.id)
+        sphere = user.sphere if user else None
+        vacs = await get_vacancies(3, sphere=sphere)
+
+        if not vacs:
+            builder = InlineKeyboardBuilder()
+            builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))
+            await callback.message.answer(no_vacancies_text, reply_markup=builder.as_markup())
+        else:
+            intro = vacancy_intro.replace("{count}", str(len(vacs)))
+            await callback.message.answer(intro)
+
+            for v in vacs:
+                await asyncio.sleep(random.uniform(vac_delay_min, vac_delay_max))
+                sal_min, sal_max = v.salary_min, v.salary_max
+                if sal_min and sal_max:
+                    salary_str = f"{sal_min:,} - {sal_max:,} ₽".replace(",", " ")
+                elif sal_min:
+                    salary_str = f"от {sal_min:,} ₽".replace(",", " ")
+                elif sal_max:
+                    salary_str = f"до {sal_max:,} ₽".replace(",", " ")
+                else:
+                    salary_str = "по договорённости"
+                desc = (v.description or "")[:100]
+                if len((v.description or "")) > 100:
+                    desc += "..."
+                text = (
+                    f"🔹 {v.title}\n"
+                    f"🏢 {v.company} • 📍 {v.city}\n"
+                    f"💰 {salary_str}\n"
+                    f"📝 {desc}"
+                )
+                builder = InlineKeyboardBuilder()
+                url = normalize_url(v.link)
+                if url:
+                    builder.row(types.InlineKeyboardButton(text="👉 Подробнее", url=url))
+                await callback.message.answer(text, reply_markup=builder.as_markup() if url else None)
+
+            back_builder = InlineKeyboardBuilder()
+            back_builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))
+            await callback.message.answer("👆 Вот что я нашёл для тебя!", reply_markup=back_builder.as_markup())
+    finally:
+        _release_callback(chat_id, msg_id)
 
 @router.callback_query(F.data == "how_to_increase")
 async def how_to_increase(callback: types.CallbackQuery):
-    contact_link = await get_setting("contact_link", "https://t.me")
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="📞 Связаться", url=contact_link))
-    builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))
-    await callback.message.answer(
-        "📈 Чтобы выйти на желаемый уровень дохода, рекомендуем:\n\n"
-        "1. Обновить резюме под конкретную роль.\n"
-        "2. Пройти аудит текущих навыков.\n"
-        "3. Подготовиться к техническому интервью.\n\n"
-        "📞 Хочешь бесплатную консультацию? Нажми кнопку ниже 👇",
-        reply_markup=builder.as_markup()
-    )
-    await callback.answer()
+    chat_id = callback.message.chat.id
+    msg_id = callback.message.message_id
+    if not _acquire_callback(chat_id, msg_id):
+        await callback.answer()
+        return
+    try:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.answer()
+
+        how_text = await get_setting(
+            "text_how_to_increase",
+            "📈 Чтобы выйти на желаемый уровень дохода, рекомендуем:\n\n"
+            "1. Обновить резюме под конкретную роль.\n"
+            "2. Пройти аудит текущих навыков.\n"
+            "3. Подготовиться к техническому интервью.\n\n"
+            "📞 Хочешь бесплатную консультацию? Нажми кнопку ниже 👇"
+        )
+        contact_link = await get_setting("contact_link", "https://t.me")
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(text="📞 Связаться", url=contact_link))
+        builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))
+
+        photo = FSInputFile("images/result.jpg")
+        try:
+            await callback.message.bot.edit_message_media(
+                chat_id=chat_id,
+                message_id=msg_id,
+                media=InputMediaPhoto(media=photo, caption=how_text),
+                reply_markup=builder.as_markup()
+            )
+        except Exception:
+            await callback.message.answer_photo(
+                photo=photo,
+                caption=how_text,
+                reply_markup=builder.as_markup()
+            )
+    finally:
+        _release_callback(chat_id, msg_id)
 
 @router.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: types.CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(
-        text="👉 Хочу узнать стоимость!", callback_data="start_quiz")
-    )
-    
-    text = (
-        f"👋 ПРИВЕТ, {callback.from_user.full_name}!\n\n"
-        "Хочешь узнать, сколько ты реально стоишь на рынке труда?\n\n"
-        "Большинство людей занижают свою зарплату на 20–40%.\n"
-        "Я рассчитаю твою рыночную стоимость и подберу подходящие вакансии за 60 секунд.\n\n"
-        "👇 Нажми кнопку ниже."
-    )
-    
-    photo = FSInputFile("images/start.jpg")
-    await callback.message.answer_photo(photo=photo, caption=text, reply_markup=builder.as_markup())
-    await callback.answer()
+    chat_id = callback.message.chat.id
+    msg_id = callback.message.message_id
+    if not _acquire_callback(chat_id, msg_id):
+        await callback.answer()
+        return
+    try:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.answer()
+
+        welcome_text = await get_setting(
+            "text_welcome",
+            "👋 ПРИВЕТ, {name}!\n\n"
+            "Хочешь узнать, сколько ты реально стоишь на рынке труда?\n\n"
+            "Большинство людей занижают свою зарплату на 20–40%.\n"
+            "Я рассчитаю твою рыночную стоимость и подберу подходящие вакансии за 60 секунд.\n\n"
+            "👇 Нажми кнопку ниже."
+        )
+        text = welcome_text.format(name=callback.from_user.full_name or "друг")
+
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(
+            text="👉 Хочу узнать стоимость!", callback_data="start_quiz")
+        )
+
+        photo = FSInputFile("images/start.jpg")
+        try:
+            await callback.message.bot.edit_message_media(
+                chat_id=chat_id,
+                message_id=msg_id,
+                media=InputMediaPhoto(media=photo, caption=text),
+                reply_markup=builder.as_markup()
+            )
+        except Exception:
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer_photo(
+                photo=photo,
+                caption=text,
+                reply_markup=builder.as_markup()
+            )
+    finally:
+        _release_callback(chat_id, msg_id)

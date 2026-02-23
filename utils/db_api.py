@@ -16,17 +16,50 @@ async def get_or_create_user(tg_id: int, username: str = None, full_name: str = 
             await session.refresh(user)
         return user
 
+
+async def get_user(tg_id: int):
+    async with async_session() as session:
+        stmt = select(User).where(User.tg_id == tg_id)
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
 async def update_user_survey(tg_id: int, **kwargs):
     async with async_session() as session:
         stmt = update(User).where(User.tg_id == tg_id).values(**kwargs)
         await session.execute(stmt)
         await session.commit()
 
-async def get_vacancies(limit: int = 3):
+def _sphere_to_db(sphere: str) -> str:
+    """Map user-facing sphere labels to DB values."""
+    mapping = {
+        "💻 IT": "IT",
+        "💬 Продажи": "Продажи",
+        "📦 Склад / производство": "Склад",
+        "🚚 Логистика": "Логистика",
+        "🔎 Другое": None,
+    }
+    return mapping.get(sphere, sphere) if sphere else None
+
+
+async def get_vacancies(limit: int = 3, sphere: str = None):
     async with async_session() as session:
-        stmt = select(Vacancy).order_by(func.random()).limit(limit)
+        db_sphere = _sphere_to_db(sphere) if sphere else None
+        stmt = select(Vacancy)
+        if db_sphere:
+            stmt = stmt.where(Vacancy.sphere == db_sphere)
+        stmt = stmt.order_by(func.random()).limit(limit)
         result = await session.execute(stmt)
-        return result.scalars().all()
+        vacs = result.scalars().all()
+        if not vacs and db_sphere:
+            stmt = select(Vacancy).order_by(func.random()).limit(limit)
+            result = await session.execute(stmt)
+            vacs = result.scalars().all()
+        return vacs
+
+async def get_vacancy(vac_id: int):
+    async with async_session() as session:
+        result = await session.execute(select(Vacancy).where(Vacancy.id == vac_id))
+        return result.scalar_one_or_none()
 
 async def get_all_vacancies():
     async with async_session() as session:
