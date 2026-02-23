@@ -20,3 +20,6 @@ class EditVacancyStates(StatesGroup):
     waiting_for_vacancy_salary_max = State()
     waiting_for_vacancy_link = State()
     waiting_for_vacancy_desc = State()
+
+class EditSettingsStates(StatesGroup):
+    waiting_for_contact_link = State()

@@ -3,8 +3,8 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from config import ADMIN_IDS
-from utils.admin_states import AdminStates, EditVacancyStates
-from utils.db_api import get_stats, add_vacancy, get_all_vacancies, delete_vacancy, get_all_users, update_vacancy
+from utils.admin_states import AdminStates, EditVacancyStates, EditSettingsStates
+from utils.db_api import get_stats, add_vacancy, get_all_vacancies, delete_vacancy, get_all_users, update_vacancy, get_setting, set_setting
 
 router = Router()
 
@@ -15,6 +15,7 @@ def get_admin_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.row(types.KeyboardButton(text="📊 Статистика"))
     builder.row(types.KeyboardButton(text="📄 Вакансии"), types.KeyboardButton(text="📢 Рассылка"))
+    builder.row(types.KeyboardButton(text="🔗 Ссылки"))
     builder.row(types.KeyboardButton(text="❌ Выйти из админки"))
     return builder.as_markup(resize_keyboard=True)
 
@@ -249,4 +250,40 @@ async def process_broadcast(message: types.Message, state: FSMContext):
         f"✅ Рассылка завершена! Получили: {count} пользователей.",
         reply_markup=get_admin_keyboard()
     )
+    await state.clear()
+
+# --- Settings / Links Management ---
+
+@router.message(F.text == "🔗 Ссылки")
+async def admin_links(message: types.Message):
+    if not is_admin(message.from_user.id): return
+    contact_link = await get_setting("contact_link", "https://t.me")
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="✏️ Изменить ссылку контакта", callback_data="admin_edit_contact_link"))
+    await message.answer(
+        f"🔗 Текущие ссылки:\n\n"
+        f"📞 Ссылка контакта: {contact_link}",
+        reply_markup=builder.as_markup()
+    )
+
+@router.callback_query(F.data == "admin_edit_contact_link")
+async def start_edit_contact_link(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer(
+        "Введите новую ссылку для кнопки контакта (например https://t.me/username):",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(EditSettingsStates.waiting_for_contact_link)
+    await callback.answer()
+
+@router.message(EditSettingsStates.waiting_for_contact_link)
+async def process_contact_link(message: types.Message, state: FSMContext):
+    url = message.text.strip()
+    if not url.startswith(("http://", "https://")):
+        if "." in url or url.startswith("@"):
+            url = "https://" + url.lstrip("@")
+        else:
+            await message.answer("❌ Неверный формат ссылки. Попробуйте ещё раз:")
+            return
+    await set_setting("contact_link", url)
+    await message.answer(f"✅ Ссылка контакта обновлена: {url}", reply_markup=get_admin_keyboard())
     await state.clear()

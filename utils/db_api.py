@@ -94,3 +94,22 @@ async def get_all_admins():
         stmt = select(User).where(User.is_admin == True)
         result = await session.execute(stmt)
         return result.scalars().all()
+
+async def get_setting(key: str, default: str = None) -> str:
+    async with async_session() as session:
+        stmt = select(Setting).where(Setting.key == key)
+        result = await session.execute(stmt)
+        setting = result.scalar_one_or_none()
+        return setting.value if setting else default
+
+async def set_setting(key: str, value: str):
+    async with async_session() as session:
+        stmt = select(Setting).where(Setting.key == key)
+        result = await session.execute(stmt)
+        setting = result.scalar_one_or_none()
+        if setting:
+            setting.value = value
+        else:
+            setting = Setting(key=key, value=value)
+            session.add(setting)
+        await session.commit()

@@ -3,7 +3,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.types import FSInputFile, InputMediaPhoto
 from utils.states import QuizStates
-from utils.db_api import get_or_create_user, update_user_survey, get_vacancies
+from utils.db_api import get_or_create_user, update_user_survey, get_vacancies, get_setting
 import random
 import asyncio
 
@@ -194,17 +194,28 @@ async def show_vacancies(callback: types.CallbackQuery):
     photo_vacancies = FSInputFile(r"c:\Users\345643q6t\Desktop\images\list of vacancies.jpg")
     await callback.message.answer_photo(
         photo=photo_vacancies,
-        caption="🔎 Я нашёл подходящие вакансии\nс зарплатой выше твоей текущей планки 👇"
+        caption="🔎 Ищу подходящие вакансии...\nЭто может занять немного времени ☕"
     )
     
     vacs = await get_vacancies(3)
     
     if not vacs:
-        await callback.message.answer("К сожалению, подходящих вакансий пока нет. Загляните позже!")
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))
+        await callback.message.answer(
+            "К сожалению, подходящих вакансий пока нет. Загляните позже!",
+            reply_markup=builder.as_markup()
+        )
         await callback.answer()
         return
 
-    for v in vacs:
+    for i, v in enumerate(vacs):
+        # Typing action + delay to simulate search
+        await callback.message.bot.send_chat_action(
+            chat_id=callback.message.chat.id, action="typing"
+        )
+        await asyncio.sleep(random.uniform(5, 10))
+
         salary_str = f"{v.salary_min or ''} - {v.salary_max or ''} ₽"
         text = (
             f"🔹 {v.title}\n"
@@ -218,15 +229,46 @@ async def show_vacancies(callback: types.CallbackQuery):
         builder.row(types.InlineKeyboardButton(text="👉 Подробнее", url=valid_url))
         await callback.message.answer(text, reply_markup=builder.as_markup())
     
+    # "Back to main menu" button after all vacancies
+    back_builder = InlineKeyboardBuilder()
+    back_builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))
+    await callback.message.answer(
+        "👆 Вот что я нашёл для тебя!",
+        reply_markup=back_builder.as_markup()
+    )
     await callback.answer()
 
 @router.callback_query(F.data == "how_to_increase")
 async def how_to_increase(callback: types.CallbackQuery):
+    contact_link = await get_setting("contact_link", "https://t.me")
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="📞 Связаться", url=contact_link))
+    builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))
     await callback.message.answer(
         "📈 Чтобы выйти на желаемый уровень дохода, рекомендуем:\n\n"
         "1. Обновить резюме под конкретную роль.\n"
         "2. Пройти аудит текущих навыков.\n"
         "3. Подготовиться к техническому интервью.\n\n"
-        "📞 Хочешь бесплатную консультацию? Нажми /contact"
+        "📞 Хочешь бесплатную консультацию? Нажми кнопку ниже 👇",
+        reply_markup=builder.as_markup()
     )
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_main")
+async def back_to_main(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(
+        text="👉 Хочу узнать стоимость!", callback_data="start_quiz")
+    )
+    
+    text = (
+        f"👋 ПРИВЕТ, {callback.from_user.full_name}!\n\n"
+        "Хочешь узнать, сколько ты реально стоишь на рынке труда?\n\n"
+        "Большинство людей занижают свою зарплату на 20–40%.\n"
+        "Я рассчитаю твою рыночную стоимость и подберу подходящие вакансии за 60 секунд.\n\n"
+        "👇 Нажми кнопку ниже."
+    )
+    
+    photo = FSInputFile(r"c:\Users\345643q6t\Desktop\images\start.jpg")
+    await callback.message.answer_photo(photo=photo, caption=text, reply_markup=builder.as_markup())
     await callback.answer()

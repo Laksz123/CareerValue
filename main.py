@@ -8,7 +8,7 @@ from config import BOT_TOKEN
 from database.session import init_db
 from handlers import common, users, admin
 
-async def main():
+async def main():   
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         print("Error: Please set BOT_TOKEN in .env file")
         return
