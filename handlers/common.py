@@ -20,5 +20,5 @@ async def cmd_start(message: types.Message):
         "👇 Нажми кнопку ниже."
     )
     
-    photo = FSInputFile(r"c:\Users\345643q6t\Desktop\images\start.jpg")
+    photo = FSInputFile("images/start.jpg")
     await message.answer_photo(photo=photo, caption=text, reply_markup=builder.as_markup())

@@ -97,7 +97,7 @@ async def process_experience(message: types.Message, state: FSMContext):
     data = await state.get_data()
     
     # Start imitation of analysis with image
-    photo_analysis = FSInputFile(r"c:\Users\345643q6t\Desktop\images\analys.jpg")
+    photo_analysis = FSInputFile("images/analys.jpg")
     analysis_msg = await message.answer_photo(
         photo=photo_analysis, 
         caption="🧠 Анализирую рынок…", 
@@ -161,7 +161,7 @@ async def process_experience(message: types.Message, state: FSMContext):
     )
 
     # Change image to result and update caption
-    photo_result = FSInputFile(r"c:\Users\345643q6t\Desktop\images\result.jpg")
+    photo_result = FSInputFile("images/result.jpg")
     try:
         await message.bot.edit_message_media(
             chat_id=analysis_msg.chat.id,
@@ -191,7 +191,7 @@ def normalize_url(url: str) -> str:
 
 @router.callback_query(F.data == "show_vacancies")
 async def show_vacancies(callback: types.CallbackQuery):
-    photo_vacancies = FSInputFile(r"c:\Users\345643q6t\Desktop\images\list of vacancies.jpg")
+    photo_vacancies = FSInputFile("images/list of vacancies.jpg")
     await callback.message.answer_photo(
         photo=photo_vacancies,
         caption="🔎 Ищу подходящие вакансии...\nЭто может занять немного времени ☕"
@@ -269,6 +269,6 @@ async def back_to_main(callback: types.CallbackQuery):
         "👇 Нажми кнопку ниже."
     )
     
-    photo = FSInputFile(r"c:\Users\345643q6t\Desktop\images\start.jpg")
+    photo = FSInputFile("images/start.jpg")
     await callback.message.answer_photo(photo=photo, caption=text, reply_markup=builder.as_markup())
     await callback.answer()
