@@ -102,11 +102,11 @@ async def process_experience(message: types.Message, state: FSMContext):
     await state.update_data(experience=message.text)
     data = await state.get_data()
     
-    # Start imitation of analysis with image
-    photo_analysis = FSInputFile("images/analys.jpg")
-    analysis_msg = await message.answer_photo(
-        photo=photo_analysis, 
-        caption="🧠 Анализирую рынок…", 
+    # Start imitation of analysis with animation
+    anim_analysis = FSInputFile("images/analys.gif")
+    analysis_msg = await message.answer_animation(
+        animation=anim_analysis,
+        caption="🧠 Анализирую рынок…",
         reply_markup=types.ReplyKeyboardRemove()
     )
     
