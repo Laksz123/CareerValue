@@ -1,10 +1,11 @@
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
-from aiogram.types import FSInputFile, InputMediaPhoto
+from aiogram.types import FSInputFile, InputMediaPhoto, MessageEntity
 from utils.states import QuizStates
-from utils.db_api import get_or_create_user, get_user, update_user_survey, get_vacancies, get_setting
+from utils.db_api import get_or_create_user, update_user_survey, get_vacancy_posts, get_setting
 from typing import Set, Tuple
+import json
 import random
 import asyncio
 
@@ -192,15 +193,6 @@ async def process_experience(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-def normalize_url(url: str) -> str:
-    if not url or not url.strip():
-        return None
-    url = url.strip()
-    if url.startswith(("http://", "https://")):
-        return url
-    return "https://" + url if "." in url else None
-
-
 # Protection from double-click: in-flight processing keys
 _processing_callbacks: Set[Tuple[int, int]] = set()
 
@@ -243,43 +235,33 @@ async def show_vacancies(callback: types.CallbackQuery):
             "К сожалению, подходящих вакансий пока нет. Загляните позже!"
         )
 
-        user = await get_user(callback.from_user.id)
-        sphere = user.sphere if user else None
-        vacs = await get_vacancies(3, sphere=sphere)
+        posts = await get_vacancy_posts(3)
 
-        if not vacs:
+        if not posts:
             builder = InlineKeyboardBuilder()
             builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))
             await callback.message.answer(no_vacancies_text, reply_markup=builder.as_markup())
         else:
-            intro = vacancy_intro.replace("{count}", str(len(vacs)))
+            intro = vacancy_intro.replace("{count}", str(len(posts)))
             await callback.message.answer(intro)
 
-            for v in vacs:
+            for post in posts:
                 await asyncio.sleep(random.uniform(vac_delay_min, vac_delay_max))
-                sal_min, sal_max = v.salary_min, v.salary_max
-                if sal_min and sal_max:
-                    salary_str = f"{sal_min:,} - {sal_max:,} ₽".replace(",", " ")
-                elif sal_min:
-                    salary_str = f"от {sal_min:,} ₽".replace(",", " ")
-                elif sal_max:
-                    salary_str = f"до {sal_max:,} ₽".replace(",", " ")
+                entities = []
+                if post.entities_json:
+                    entities = [MessageEntity.model_validate(e) for e in json.loads(post.entities_json)]
+                if post.content_type == "photo":
+                    await callback.message.bot.send_photo(
+                        chat_id=callback.message.chat.id,
+                        photo=post.photo_file_id,
+                        caption=post.text,
+                        caption_entities=entities if entities else None,
+                    )
                 else:
-                    salary_str = "по договорённости"
-                desc = (v.description or "")[:100]
-                if len((v.description or "")) > 100:
-                    desc += "..."
-                text = (
-                    f"🔹 {v.title}\n"
-                    f"🏢 {v.company} • 📍 {v.city}\n"
-                    f"💰 {salary_str}\n"
-                    f"📝 {desc}"
-                )
-                builder = InlineKeyboardBuilder()
-                url = normalize_url(v.link)
-                if url:
-                    builder.row(types.InlineKeyboardButton(text="👉 Подробнее", url=url))
-                await callback.message.answer(text, reply_markup=builder.as_markup() if url else None)
+                    await callback.message.answer(
+                        post.text,
+                        entities=entities if entities else None,
+                    )
 
             back_builder = InlineKeyboardBuilder()
             back_builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))

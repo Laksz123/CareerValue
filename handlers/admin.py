@@ -4,8 +4,16 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from config import ADMIN_IDS
-from utils.admin_states import AdminStates, EditVacancyStates, EditSettingsStates, EditDelaysStates, EditTextsStates
-from utils.db_api import get_stats, add_vacancy, get_all_vacancies, get_vacancy, delete_vacancy, get_all_users, update_vacancy, get_setting, set_setting
+from utils.admin_states import AdminStates, EditSettingsStates, EditDelaysStates, EditTextsStates
+from utils.db_api import (
+    get_stats,
+    get_all_users,
+    get_setting,
+    set_setting,
+    add_vacancy_post,
+    get_all_vacancy_posts,
+    delete_vacancy_post,
+)
 
 router = Router()
 
@@ -61,285 +69,94 @@ async def admin_vacancies_msg(message: types.Message):
 
 @router.callback_query(F.data == "admin_vac_list")
 async def admin_vac_list(callback: types.CallbackQuery):
-    vacs = await get_all_vacancies()
-    if not vacs:
-        await callback.message.answer("Вакансий пока нет.")
+    posts = await get_all_vacancy_posts()
+    if not posts:
+        await callback.message.answer("Постов пока нет.")
         await callback.answer()
         return
 
-    for v in vacs:
-        link_preview = (v.link[:40] + "…") if v.link and len(v.link) > 40 else (v.link or "—")
-        text = f"ID: {v.id}\n🔹 {v.title} в {v.company}\n📍 {v.city}\n🔗 Ссылка: {link_preview}"
+    for p in posts:
+        preview = (p.text[:50] + "…") if p.text and len(p.text) > 50 else (p.text or "—")
+        text = f"ID: {p.id}\n📄 {preview}"
         builder = InlineKeyboardBuilder()
-        builder.row(
-            types.InlineKeyboardButton(text="✏️ Изменить", callback_data=f"admin_edit_vac_{v.id}"),
-            types.InlineKeyboardButton(text="❌ Удалить", callback_data=f"admin_del_vac_{v.id}")
-        )
+        builder.row(types.InlineKeyboardButton(text="❌ Удалить", callback_data=f"admin_del_post_{p.id}"))
         await callback.message.answer(text, reply_markup=builder.as_markup())
     await callback.answer()
 
-@router.callback_query(F.data.startswith("admin_del_vac_"))
-async def admin_del_vac(callback: types.CallbackQuery):
-    vac_id = int(callback.data.split("_")[-1])
-    if await delete_vacancy(vac_id):
+
+@router.callback_query(F.data.startswith("admin_del_post_"))
+async def admin_del_post(callback: types.CallbackQuery):
+    post_id = int(callback.data.split("_")[-1])
+    if await delete_vacancy_post(post_id):
         await callback.message.delete()
-        await callback.message.answer(f"✅ Вакансия ID {vac_id} удалена")
+        await callback.message.answer(f"✅ Пост ID {post_id} удалён")
     else:
         await callback.message.answer("Ошибка удаления")
     await callback.answer()
 
-# --- Vacancy Editing Flow (inline field selection) ---
 
-SPHERES = [
-    ("💻 IT", "IT"),
-    ("💬 Продажи", "Продажи"),
-    ("📦 Склад", "Склад"),
-    ("🚚 Логистика", "Логистика"),
-]
+# --- Vacancy Post Addition Flow ---
 
-def fix_url(url: str) -> str:
-    url = url.strip()
-    if not url or url == "-": return url
-    if not url.startswith(("http://", "https://")):
-        if "." in url: return "https://" + url
-    return url
-
-
-def _vacancy_edit_card(vac) -> str:
-    """Build vacancy card text for edit view."""
-    link_preview = (vac.link[:50] + "…") if vac.link and len(vac.link) > 50 else (vac.link or "—")
-    return (
-        f"📝 Вакансия ID {vac.id}\n\n"
-        f"🔹 Название: {vac.title}\n"
-        f"🏢 Компания: {vac.company}\n"
-        f"📍 Город: {vac.city}\n"
-        f"📂 Сфера: {vac.sphere}\n"
-        f"💰 Зарплата: {vac.salary_min or '—'} - {vac.salary_max or '—'}\n"
-        f"🔗 Ссылка: {link_preview}\n"
-        f"📄 Описание: {(vac.description or '—')[:80]}{'…' if (vac.description or '') and len(vac.description or '') > 80 else ''}"
+@router.callback_query(F.data == "admin_add_vacancy")
+async def start_add_vacancy(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer(
+        "Отправьте пост вакансии (текст, фото, ссылки, цитаты — всё сохранится как есть):",
+        reply_markup=get_cancel_keyboard()
     )
-
-
-def _vacancy_edit_buttons(vac_id: int) -> InlineKeyboardBuilder:
-    """Build inline keyboard for vacancy edit fields."""
-    b = InlineKeyboardBuilder()
-    b.row(
-        types.InlineKeyboardButton(text="✏️ Название", callback_data=f"admin_vac_edit_{vac_id}_title"),
-        types.InlineKeyboardButton(text="✏️ Компания", callback_data=f"admin_vac_edit_{vac_id}_company"),
-    )
-    b.row(
-        types.InlineKeyboardButton(text="✏️ Город", callback_data=f"admin_vac_edit_{vac_id}_city"),
-        types.InlineKeyboardButton(text="✏️ Сфера", callback_data=f"admin_vac_edit_{vac_id}_sphere"),
-    )
-    b.row(
-        types.InlineKeyboardButton(text="✏️ Зарплата", callback_data=f"admin_vac_edit_{vac_id}_salary"),
-        types.InlineKeyboardButton(text="✏️ Ссылка", callback_data=f"admin_vac_edit_{vac_id}_link"),
-    )
-    b.row(types.InlineKeyboardButton(text="✏️ Описание", callback_data=f"admin_vac_edit_{vac_id}_desc"))
-    b.row(
-        types.InlineKeyboardButton(text="✅ Готово", callback_data=f"admin_vac_done_{vac_id}"),
-        types.InlineKeyboardButton(text="❌ Удалить", callback_data=f"admin_del_vac_{vac_id}"),
-    )
-    return b
-
-
-@router.callback_query(F.data.startswith("admin_edit_vac_"))
-async def start_edit_vacancy(callback: types.CallbackQuery, state: FSMContext):
-    vac_id = int(callback.data.split("_")[-1])
-    vac = await get_vacancy(vac_id)
-    if not vac:
-        await callback.answer("Вакансия не найдена")
-        return
-    text = _vacancy_edit_card(vac)
-    await callback.message.edit_text(text, reply_markup=_vacancy_edit_buttons(vac_id).as_markup())
+    await state.set_state(AdminStates.waiting_for_vacancy_post)
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("admin_vac_edit_"))
-async def vac_edit_field(callback: types.CallbackQuery, state: FSMContext):
-    parts = callback.data.split("_")
-    vac_id = int(parts[3])
-    field = parts[4]
-    vac = await get_vacancy(vac_id)
-    if not vac:
-        await callback.answer("Вакансия не найдена")
-        return
-
-    if field == "sphere":
-        b = InlineKeyboardBuilder()
-        for i, (label, db_val) in enumerate(SPHERES):
-            b.row(types.InlineKeyboardButton(text=label, callback_data=f"admin_vac_sphere_{vac_id}_{i}"))
-        b.row(types.InlineKeyboardButton(text="◀️ Назад", callback_data=f"admin_edit_vac_{vac_id}"))
-        await callback.message.edit_text(
-            f"📂 Выберите сферу для вакансии «{vac.title}»:",
-            reply_markup=b.as_markup()
-        )
-        await callback.answer()
-        return
-
-    if field == "salary":
-        await state.update_data(edit_vac_id=vac_id, edit_field="salary")
-        await callback.message.answer(
-            f"💰 Введите зарплату (min max через пробел, например: 80000 120000):",
-            reply_markup=get_cancel_keyboard()
-        )
-        await state.set_state(EditVacancyStates.waiting_for_edit_value)
-        await callback.answer()
-        return
-
-    prompts = {
-        "title": ("🔹 Введите новое название:", "title"),
-        "company": ("🏢 Введите название компании:", "company"),
-        "city": ("📍 Введите город:", "city"),
-        "link": ("🔗 Введите ссылку:", "link"),
-        "desc": ("📄 Введите описание:", "description"),
-    }
-    if field not in prompts:
-        await callback.answer()
-        return
-    prompt, db_field = prompts[field]
-    await state.update_data(edit_vac_id=vac_id, edit_field=db_field)
-    await callback.message.answer(prompt, reply_markup=get_cancel_keyboard())
-    await state.set_state(EditVacancyStates.waiting_for_edit_value)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("admin_vac_sphere_"))
-async def vac_set_sphere(callback: types.CallbackQuery):
-    parts = callback.data.split("_")
-    vac_id = int(parts[3])
-    idx = int(parts[4])
-    sphere = SPHERES[idx][1] if 0 <= idx < len(SPHERES) else "IT"
-    await update_vacancy(vac_id, sphere=sphere)
-    vac = await get_vacancy(vac_id)
-    text = _vacancy_edit_card(vac)
-    await callback.message.edit_text(text, reply_markup=_vacancy_edit_buttons(vac_id).as_markup())
-    await callback.answer("✅ Сфера обновлена")
-
-
-@router.callback_query(F.data.startswith("admin_vac_done_"))
-async def vac_edit_done(callback: types.CallbackQuery, state: FSMContext):
-    vac_id = int(callback.data.split("_")[-1])
-    vac = await get_vacancy(vac_id)
-    text = _vacancy_edit_card(vac)
-    await callback.message.edit_text(text, reply_markup=_vacancy_edit_buttons(vac_id).as_markup())
-    await callback.message.answer("✅ Редактирование завершено", reply_markup=get_admin_keyboard())
-    await state.clear()
-    await callback.answer()
-
-
-@router.message(EditVacancyStates.waiting_for_edit_value)
-async def vac_edit_value_received(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    vac_id = data.get("edit_vac_id")
-    field = data.get("edit_field")
-    if not vac_id or not field:
-        await state.clear()
-        await message.answer("Сессия истекла.", reply_markup=get_admin_keyboard())
-        return
+@router.message(AdminStates.waiting_for_vacancy_post, F.text)
+@router.message(AdminStates.waiting_for_vacancy_post, F.photo)
+async def process_vacancy_post(message: types.Message, state: FSMContext):
+    import json
+    from aiogram.types import MessageEntity
 
     if message.text == "❌ Отмена":
         await state.clear()
         await message.answer("Отменено.", reply_markup=get_admin_keyboard())
         return
 
-    if field == "salary":
-        parts = message.text.strip().split()
-        if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
-            await message.answer("❌ Введите два числа через пробел (например: 80000 120000):")
-            return
-        await update_vacancy(vac_id, salary_min=int(parts[0]), salary_max=int(parts[1]))
-    elif field == "link":
-        await update_vacancy(vac_id, link=fix_url(message.text))
-    else:
-        await update_vacancy(vac_id, **{field: message.text})
-
-    vac = await get_vacancy(vac_id)
-    await state.clear()
-    await message.answer(
-        "✅ Обновлено!\n\n" + _vacancy_edit_card(vac),
-        reply_markup=_vacancy_edit_buttons(vac_id).as_markup()
-    )
-
-# --- Vacancy Addition Flow ---
-
-@router.callback_query(F.data == "admin_add_vacancy")
-async def start_add_vacancy(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("Введите название вакансии:", reply_markup=get_cancel_keyboard())
-    await state.set_state(AdminStates.waiting_for_vacancy_title)
-    await callback.answer()
-
-@router.message(AdminStates.waiting_for_vacancy_title)
-async def process_vac_title(message: types.Message, state: FSMContext):
-    await state.update_data(title=message.text)
-    await message.answer("Введите название компании:", reply_markup=get_cancel_keyboard())
-    await state.set_state(AdminStates.waiting_for_vacancy_company)
-
-@router.message(AdminStates.waiting_for_vacancy_company)
-async def process_vac_company(message: types.Message, state: FSMContext):
-    await state.update_data(company=message.text)
-    await message.answer("Введите город:", reply_markup=get_cancel_keyboard())
-    await state.set_state(AdminStates.waiting_for_vacancy_city)
-
-@router.message(AdminStates.waiting_for_vacancy_city)
-async def process_vac_city(message: types.Message, state: FSMContext):
-    await state.update_data(city=message.text)
-    b = InlineKeyboardBuilder()
-    for i, (label, _) in enumerate(SPHERES):
-        b.row(types.InlineKeyboardButton(text=label, callback_data=f"admin_add_sphere_{i}"))
-    b.row(types.InlineKeyboardButton(text="❌ Отмена", callback_data="admin_add_cancel"))
-    await message.answer("📂 Выберите сферу:", reply_markup=b.as_markup())
-    await state.set_state(AdminStates.waiting_for_vacancy_sphere)
-
-@router.callback_query(F.data == "admin_add_cancel")
-async def process_add_cancel(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_text("Добавление вакансии отменено.")
-    await callback.message.answer("Действие отменено", reply_markup=get_admin_keyboard())
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("admin_add_sphere_"))
-async def process_add_sphere(callback: types.CallbackQuery, state: FSMContext):
-    if "waiting_for_vacancy_sphere" not in (await state.get_state() or ""):
-        await callback.answer()
+    content_type = "photo" if message.photo else "text"
+    text = message.caption or message.text or ""
+    if not text:
+        await message.answer("Отправьте пост с текстом или подписью к фото.")
         return
-    idx = int(callback.data.split("_")[-1])
-    sphere = SPHERES[idx][1] if 0 <= idx < len(SPHERES) else "IT"
-    await state.update_data(sphere=sphere)
-    await callback.message.edit_text(f"✅ Сфера: {sphere}")
-    await callback.message.answer("Введите минимальную зарплату (число):", reply_markup=get_cancel_keyboard())
-    await state.set_state(AdminStates.waiting_for_vacancy_salary_min)
-    await callback.answer()
 
-@router.message(AdminStates.waiting_for_vacancy_salary_min)
-async def process_vac_salary_min(message: types.Message, state: FSMContext):
-    await state.update_data(salary_min=int(message.text) if message.text.isdigit() else 0)
-    await message.answer("Введите максимальную зарплату (число):", reply_markup=get_cancel_keyboard())
-    await state.set_state(AdminStates.waiting_for_vacancy_salary_max)
+    entities = message.entities or message.caption_entities or []
+    entities_json = json.dumps([e.model_dump() for e in entities]) if entities else None
 
-@router.message(AdminStates.waiting_for_vacancy_salary_max)
-async def process_vac_salary_max(message: types.Message, state: FSMContext):
-    await state.update_data(salary_max=int(message.text) if message.text.isdigit() else 0)
-    await message.answer("Введите ссылку на вакансию:", reply_markup=get_cancel_keyboard())
-    await state.set_state(AdminStates.waiting_for_vacancy_link)
+    photo_file_id = message.photo[-1].file_id if message.photo else None
 
-@router.message(AdminStates.waiting_for_vacancy_link)
-async def process_vac_link(message: types.Message, state: FSMContext):
-    await state.update_data(link=fix_url(message.text))
-    await message.answer("Введите описание:", reply_markup=get_cancel_keyboard())
-    await state.set_state(AdminStates.waiting_for_vacancy_desc)
-
-@router.message(AdminStates.waiting_for_vacancy_desc)
-async def process_vac_desc(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    await add_vacancy(
-        title=data['title'], company=data['company'], city=data['city'],
-        sphere=data['sphere'], experience="Любой", description=message.text,
-        salary_min=data.get('salary_min', 0), salary_max=data.get('salary_max', 0),
-        link=data.get('link', "")
+    await add_vacancy_post(
+        content_type=content_type,
+        text=text,
+        entities_json=entities_json,
+        photo_file_id=photo_file_id,
     )
-    await message.answer("✅ Вакансия добавлена!", reply_markup=get_admin_keyboard())
+
+    await message.answer("Сохранено. Ниже пост, как бот будет его отправлять:", reply_markup=get_admin_keyboard())
     await state.clear()
+
+    # Preview: send copy of the post
+    try:
+        await message.send_copy(chat_id=message.chat.id)
+    except (TypeError, Exception):
+        entities_list = [MessageEntity.model_validate(e) for e in json.loads(entities_json or "[]")]
+        if content_type == "photo":
+            await message.bot.send_photo(
+                chat_id=message.chat.id,
+                photo=photo_file_id,
+                caption=text,
+                caption_entities=entities_list,
+            )
+        else:
+            await message.bot.send_message(
+                chat_id=message.chat.id,
+                text=text,
+                entities=entities_list,
+            )
 
 # --- Broadcast Flow ---
 

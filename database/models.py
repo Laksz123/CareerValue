@@ -32,6 +32,17 @@ class Vacancy(Base):
     link = Column(String, nullable=True)
     description = Column(String, nullable=True)
 
+
+class VacancyPost(Base):
+    __tablename__ = "vacancy_posts"
+
+    id = Column(Integer, primary_key=True)
+    content_type = Column(String(10), nullable=False)  # "text" | "photo"
+    text = Column(String, nullable=False)
+    entities_json = Column(String, nullable=True)
+    photo_file_id = Column(String, nullable=True)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

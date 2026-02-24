@@ -1,5 +1,5 @@
 from database.session import async_session
-from database.models import User, Vacancy, Setting
+from database.models import User, Vacancy, VacancyPost, Setting
 from sqlalchemy import select, update, func
 from sqlalchemy.dialects.sqlite import insert
 
@@ -88,6 +88,53 @@ async def add_vacancy(**kwargs):
         session.add(vacancy)
         await session.commit()
         return vacancy
+
+
+# --- VacancyPost (post-based vacancies) ---
+
+async def add_vacancy_post(content_type: str, text: str, entities_json: str = None, photo_file_id: str = None):
+    async with async_session() as session:
+        post = VacancyPost(
+            content_type=content_type,
+            text=text,
+            entities_json=entities_json,
+            photo_file_id=photo_file_id,
+        )
+        session.add(post)
+        await session.commit()
+        await session.refresh(post)
+        return post
+
+
+async def get_vacancy_posts(limit: int = 3):
+    async with async_session() as session:
+        stmt = select(VacancyPost).order_by(func.random()).limit(limit)
+        result = await session.execute(stmt)
+        return result.scalars().all()
+
+
+async def get_all_vacancy_posts():
+    async with async_session() as session:
+        stmt = select(VacancyPost).order_by(VacancyPost.id.desc())
+        result = await session.execute(stmt)
+        return result.scalars().all()
+
+
+async def get_vacancy_post(post_id: int):
+    async with async_session() as session:
+        result = await session.execute(select(VacancyPost).where(VacancyPost.id == post_id))
+        return result.scalar_one_or_none()
+
+
+async def delete_vacancy_post(post_id: int):
+    async with async_session() as session:
+        post = await session.get(VacancyPost, post_id)
+        if post:
+            await session.delete(post)
+            await session.commit()
+            return True
+        return False
+
 
 async def get_all_users():
     async with async_session() as session:
