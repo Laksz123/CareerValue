@@ -1,10 +1,11 @@
 from aiogram import Router, types, F
 from typing import Optional, Tuple
+import secrets
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from config import ADMIN_IDS
-from utils.admin_states import AdminStates, EditSettingsStates, EditDelaysStates, EditTextsStates
+from utils.admin_states import AdminStates, EditSettingsStates, EditDelaysStates, EditTextsStates, ReferralLinkStates
 from utils.db_api import (
     get_stats,
     get_all_users,
@@ -13,6 +14,9 @@ from utils.db_api import (
     add_vacancy_post,
     get_all_vacancy_posts,
     delete_vacancy_post,
+    create_referral_link,
+    get_all_referral_links,
+    delete_referral_link,
 )
 
 router = Router()
@@ -24,8 +28,8 @@ def get_admin_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.row(types.KeyboardButton(text="📊 Статистика"))
     builder.row(types.KeyboardButton(text="📄 Вакансии"), types.KeyboardButton(text="📢 Рассылка"))
-    builder.row(types.KeyboardButton(text="🔗 Ссылки"), types.KeyboardButton(text="⏱ Задержки"))
-    builder.row(types.KeyboardButton(text="📝 Тексты"))
+    builder.row(types.KeyboardButton(text="🔗 Ссылки"), types.KeyboardButton(text="📊 Реферальные ссылки"))
+    builder.row(types.KeyboardButton(text="⏱ Задержки"), types.KeyboardButton(text="📝 Тексты"))
     builder.row(types.KeyboardButton(text="❌ Выйти из админки"))
     return builder.as_markup(resize_keyboard=True)
 
@@ -189,11 +193,123 @@ async def admin_links(message: types.Message):
     contact_link = await get_setting("contact_link", "https://t.me")
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="✏️ Изменить ссылку контакта", callback_data="admin_edit_contact_link"))
+    builder.row(types.InlineKeyboardButton(text="📊 Реферальные ссылки", callback_data="admin_referral_links"))
     await message.answer(
         f"🔗 Текущие ссылки:\n\n"
         f"📞 Кнопка «Связаться» (экран «Как выйти на X ₽»): {contact_link}",
         reply_markup=builder.as_markup()
     )
+
+
+# --- Referral Links ---
+
+def _format_date(dt) -> str:
+    if dt is None:
+        return "—"
+    return dt.strftime("%d.%m.%Y %H:%M")
+
+async def _show_referral_links(message_or_callback, is_callback: bool = False):
+    """Show referral links list. message_or_callback has .message.answer and .bot for callback, or .answer and .bot for message."""
+    target = message_or_callback.message if is_callback else message_or_callback
+    bot = message_or_callback.bot if is_callback else message_or_callback.bot
+    links = await get_all_referral_links()
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="➕ Создать ссылку", callback_data="admin_create_referral_link"))
+    if not links:
+        await target.answer(
+            "📊 Реферальные ссылки\n\nПока нет ни одной ссылки. Создайте первую!",
+            reply_markup=builder.as_markup()
+        )
+    else:
+        try:
+            bot_info = await bot.get_me()
+            bot_username = bot_info.username or "bot"
+        except Exception:
+            bot_username = "bot"
+        base_url = f"https://t.me/{bot_username}"
+        await target.answer("📊 Реферальные ссылки:", reply_markup=builder.as_markup())
+        for link in links:
+            full_url = f"{base_url}?start=ref_{link.slug}"
+            del_builder = InlineKeyboardBuilder()
+            del_builder.row(types.InlineKeyboardButton(text="❌ Удалить", callback_data=f"admin_del_ref_{link.id}"))
+            await target.answer(
+                f"📌 {link.name}\n"
+                f"🔗 {full_url}\n"
+                f"👆 Переходов: {link.clicks} | 📅 Создана: {_format_date(link.created_at)}",
+                reply_markup=del_builder.as_markup()
+            )
+
+
+@router.message(F.text == "📊 Реферальные ссылки")
+async def admin_referral_links_msg(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    await _show_referral_links(message, is_callback=False)
+
+
+@router.callback_query(F.data == "admin_referral_links")
+async def admin_referral_links_list(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await _show_referral_links(callback, is_callback=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_create_referral_link")
+async def start_create_referral_link(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer(
+        "Введите название для реферальной ссылки (например: «Кампания ВК» или «Реклама в Telegram»):",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(ReferralLinkStates.waiting_for_link_name)
+    await callback.answer()
+
+
+@router.message(ReferralLinkStates.waiting_for_link_name)
+async def process_referral_link_name(message: types.Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Отменено.", reply_markup=get_admin_keyboard())
+        return
+    name = message.text.strip()
+    if not name:
+        await message.answer("Введите непустое название:")
+        return
+    slug = secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:8].lower()
+    link = await create_referral_link(name=name, slug=slug)
+    if not link:
+        await message.answer("Ошибка: не удалось создать ссылку (возможно, slug занят). Попробуйте снова.")
+        return
+    try:
+        bot_info = await message.bot.get_me()
+        bot_username = bot_info.username or "bot"
+    except Exception:
+        bot_username = "bot"
+    full_url = f"https://t.me/{bot_username}?start=ref_{link.slug}"
+    await message.answer(
+        f"✅ Реферальная ссылка создана!\n\n"
+        f"📌 Название: {link.name}\n"
+        f"🔗 Ссылка: {full_url}\n"
+        f"📅 Создана: {_format_date(link.created_at)}\n\n"
+        f"Каждый переход по этой ссылке будет учитываться в статистике.",
+        reply_markup=get_admin_keyboard()
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin_del_ref_"))
+async def admin_delete_referral_link(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    link_id = int(callback.data.split("_")[-1])
+    if await delete_referral_link(link_id):
+        await callback.message.delete()
+        await callback.message.answer("✅ Реферальная ссылка удалена")
+    else:
+        await callback.message.answer("Ошибка удаления")
+    await callback.answer()
 
 @router.callback_query(F.data == "admin_edit_contact_link")
 async def start_edit_contact_link(callback: types.CallbackQuery, state: FSMContext):

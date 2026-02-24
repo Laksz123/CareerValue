@@ -1,5 +1,6 @@
+from typing import Optional
 from database.session import async_session
-from database.models import User, Vacancy, VacancyPost, Setting
+from database.models import User, Vacancy, VacancyPost, Setting, ReferralLink
 from sqlalchemy import select, update, func
 from sqlalchemy.dialects.sqlite import insert
 
@@ -193,3 +194,51 @@ async def set_setting(key: str, value: str):
             setting = Setting(key=key, value=value)
             session.add(setting)
         await session.commit()
+
+
+# --- Referral Links ---
+
+async def create_referral_link(name: str, slug: str) -> Optional[ReferralLink]:
+    async with async_session() as session:
+        existing = await session.execute(select(ReferralLink).where(ReferralLink.slug == slug))
+        if existing.scalar_one_or_none():
+            return None
+        link = ReferralLink(name=name, slug=slug)
+        session.add(link)
+        await session.commit()
+        await session.refresh(link)
+        return link
+
+
+async def get_all_referral_links():
+    async with async_session() as session:
+        stmt = select(ReferralLink).order_by(ReferralLink.created_at.desc())
+        result = await session.execute(stmt)
+        return result.scalars().all()
+
+
+async def get_referral_link_by_slug(slug: str) -> Optional[ReferralLink]:
+    async with async_session() as session:
+        result = await session.execute(select(ReferralLink).where(ReferralLink.slug == slug))
+        return result.scalar_one_or_none()
+
+
+async def increment_referral_clicks(slug: str) -> bool:
+    async with async_session() as session:
+        link = await session.execute(select(ReferralLink).where(ReferralLink.slug == slug))
+        link = link.scalar_one_or_none()
+        if not link:
+            return False
+        link.clicks += 1
+        await session.commit()
+        return True
+
+
+async def delete_referral_link(link_id: int) -> bool:
+    async with async_session() as session:
+        link = await session.get(ReferralLink, link_id)
+        if link:
+            await session.delete(link)
+            await session.commit()
+            return True
+        return False

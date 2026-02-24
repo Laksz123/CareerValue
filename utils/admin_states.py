@@ -15,3 +15,7 @@ class EditDelaysStates(StatesGroup):
 
 class EditTextsStates(StatesGroup):
     waiting_for_text_value = State()
+
+
+class ReferralLinkStates(StatesGroup):
+    waiting_for_link_name = State()

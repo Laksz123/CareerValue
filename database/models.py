@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, BigInteger, String, Boolean, Float, ForeignKey
+from sqlalchemy import Column, Integer, BigInteger, String, Boolean, Float, ForeignKey, DateTime
 from sqlalchemy.orm import DeclarativeBase
+from datetime import datetime
 
 class Base(DeclarativeBase):
     pass
@@ -48,3 +49,13 @@ class Setting(Base):
 
     key = Column(String, primary_key=True)
     value = Column(String, nullable=False)
+
+
+class ReferralLink(Base):
+    __tablename__ = "referral_links"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    slug = Column(String, unique=True, nullable=False)
+    clicks = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
