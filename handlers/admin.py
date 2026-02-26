@@ -336,6 +336,25 @@ async def process_contact_link(message: types.Message, state: FSMContext):
 
 # --- Delays Management ---
 
+FUNNEL_DELAY_KEYS = [
+    ("delay_funnel_1", "1-е сообщение"),
+    ("delay_funnel_2", "2-е сообщение"),
+    ("delay_funnel_3", "3-е сообщение"),
+    ("delay_funnel_4", "4-е сообщение"),
+    ("delay_funnel_5", "5-е сообщение"),
+]
+FUNNEL_DELAY_DEFAULTS = ["0", "10", "20", "50", "60"]
+
+
+def _format_delay_sec(sec: float) -> str:
+    """Форматирует секунды: 90 -> '1мин 30сек', 60 -> '1мин', 10 -> '10сек'."""
+    sec = int(sec)
+    if sec >= 60:
+        m, s = divmod(sec, 60)
+        return f"{m}мин {s}сек" if s else f"{m}мин"
+    return f"{sec}сек"
+
+
 @router.message(F.text == "⏱ Задержки")
 async def admin_delays(message: types.Message):
     if not is_admin(message.from_user.id): return
@@ -343,13 +362,30 @@ async def admin_delays(message: types.Message):
     loading_max = await get_setting("delay_loading_max", "1.2")
     vacancy_min = await get_setting("delay_vacancy_min", "0.5")
     vacancy_max = await get_setting("delay_vacancy_max", "1.5")
+
+    funnel_lines = []
+    for (key, label), default in zip(FUNNEL_DELAY_KEYS, FUNNEL_DELAY_DEFAULTS):
+        val = await get_setting(key, default)
+        try:
+            sec = float(val)
+            funnel_lines.append(f"{label}: {_format_delay_sec(sec)}")
+        except ValueError:
+            funnel_lines.append(f"{label}: {val}")
+
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="✏️ Задержки загрузки (min-max сек)", callback_data="admin_edit_loading_delays"))
     builder.row(types.InlineKeyboardButton(text="✏️ Пауза перед вакансиями (min-max сек)", callback_data="admin_edit_vacancy_delays"))
+    for i, (key, label) in enumerate(FUNNEL_DELAY_KEYS):
+        val = await get_setting(key, FUNNEL_DELAY_DEFAULTS[i])
+        builder.row(types.InlineKeyboardButton(
+            text=f"⏰ {label} — {_format_delay_sec(float(val) if val.replace('.','').isdigit() else 0)}",
+            callback_data=f"admin_edit_funnel_{key}"
+        ))
     await message.answer(
         f"⏱ Текущие задержки (секунды):\n\n"
         f"Загрузка (анимация): {loading_min} - {loading_max}\n"
-        f"Перед показом вакансий: {vacancy_min} - {vacancy_max}",
+        f"Перед показом вакансий: {vacancy_min} - {vacancy_max}\n\n"
+        f"📩 Задержки между сообщениями воронки:\n" + "\n".join(funnel_lines),
         reply_markup=builder.as_markup()
     )
 
@@ -370,6 +406,24 @@ async def start_edit_vacancy_delays(callback: types.CallbackQuery, state: FSMCon
     )
     await state.set_state(EditDelaysStates.waiting_for_vacancy_delays)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_edit_funnel_"))
+async def start_edit_funnel_delay(callback: types.CallbackQuery, state: FSMContext):
+    key = callback.data.replace("admin_edit_funnel_", "")
+    label = next((lbl for k, lbl in FUNNEL_DELAY_KEYS if k == key), key)
+    default = next((d for (k, _), d in zip(FUNNEL_DELAY_KEYS, FUNNEL_DELAY_DEFAULTS) if k == key), "0")
+    current = await get_setting(key, default)
+    await state.update_data(edit_funnel_key=key, edit_funnel_label=label)
+    await callback.message.answer(
+        f"⏰ Задержка для «{label}»\n\n"
+        f"Текущее значение: {current} сек\n\n"
+        f"Введите задержку в секундах (например: 10 или 1.5):",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(EditDelaysStates.waiting_for_funnel_delay)
+    await callback.answer()
+
 
 def _parse_delays(text: str) -> Optional[Tuple[float, float]]:
     parts = text.strip().split()
@@ -403,6 +457,31 @@ async def process_vacancy_delays(message: types.Message, state: FSMContext):
     await set_setting("delay_vacancy_min", str(parsed[0]))
     await set_setting("delay_vacancy_max", str(parsed[1]))
     await message.answer(f"✅ Пауза перед вакансиями обновлена: {parsed[0]} - {parsed[1]} сек", reply_markup=get_admin_keyboard())
+    await state.clear()
+
+
+@router.message(EditDelaysStates.waiting_for_funnel_delay)
+async def process_funnel_delay(message: types.Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Отменено.", reply_markup=get_admin_keyboard())
+        return
+    try:
+        sec = float(message.text.strip().replace(",", "."))
+        if sec < 0:
+            raise ValueError("Отрицательное значение")
+    except ValueError:
+        await message.answer("❌ Введите число (секунды), например: 10 или 1.5")
+        return
+    data = await state.get_data()
+    key = data.get("edit_funnel_key")
+    label = data.get("edit_funnel_label", "сообщение")
+    if key:
+        await set_setting(key, str(sec))
+        await message.answer(
+            f"✅ Задержка для «{label}» обновлена: {_format_delay_sec(sec)}",
+            reply_markup=get_admin_keyboard()
+        )
     await state.clear()
 
 

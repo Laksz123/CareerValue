@@ -107,9 +107,10 @@ async def add_vacancy_post(content_type: str, text: str, entities_json: str = No
         return post
 
 
-async def get_vacancy_posts(limit: int = 3):
+async def get_vacancy_posts(limit: int = 50):
+    """Возвращает вакансии в порядке добавления (по id), с лимитом."""
     async with async_session() as session:
-        stmt = select(VacancyPost).order_by(func.random()).limit(limit)
+        stmt = select(VacancyPost).order_by(VacancyPost.id.asc()).limit(limit)
         result = await session.execute(stmt)
         return result.scalars().all()
 

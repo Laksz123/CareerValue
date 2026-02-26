@@ -235,7 +235,7 @@ async def show_vacancies(callback: types.CallbackQuery):
             "К сожалению, подходящих вакансий пока нет. Загляните позже!"
         )
 
-        posts = await get_vacancy_posts(3)
+        posts = await get_vacancy_posts(50)
 
         if not posts:
             builder = InlineKeyboardBuilder()
@@ -245,21 +245,26 @@ async def show_vacancies(callback: types.CallbackQuery):
             intro = vacancy_intro.replace("{count}", str(len(posts)))
             await callback.message.answer(intro)
 
-            for post in posts:
+            for i, post in enumerate(posts, 1):
                 await asyncio.sleep(random.uniform(vac_delay_min, vac_delay_max))
+                prefix = f"📌 {i}. "
+                text_with_num = prefix + post.text
                 entities = []
                 if post.entities_json:
-                    entities = [MessageEntity.model_validate(e) for e in json.loads(post.entities_json)]
+                    for e in [MessageEntity.model_validate(x) for x in json.loads(post.entities_json)]:
+                        d = e.model_dump()
+                        d["offset"] = e.offset + len(prefix)
+                        entities.append(MessageEntity.model_validate(d))
                 if post.content_type == "photo":
                     await callback.message.bot.send_photo(
                         chat_id=callback.message.chat.id,
                         photo=post.photo_file_id,
-                        caption=post.text,
+                        caption=text_with_num,
                         caption_entities=entities if entities else None,
                     )
                 else:
                     await callback.message.answer(
-                        post.text,
+                        text_with_num,
                         entities=entities if entities else None,
                     )
 
