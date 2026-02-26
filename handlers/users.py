@@ -1,10 +1,30 @@
 from aiogram import Router, types, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.types import FSInputFile, InputMediaPhoto, MessageEntity
 from utils.states import QuizStates
 from utils.db_api import get_or_create_user, update_user_survey, get_vacancy_posts, get_setting
 from typing import Set, Tuple
+
+VACANCY_DELAY_KEYS = ["delay_vacancy_1", "delay_vacancy_2", "delay_vacancy_3", "delay_vacancy_4", "delay_vacancy_5"]
+VACANCY_DELAY_DEFAULTS = ["0", "10", "20", "50", "60"]
+
+
+def _utf16_len(s: str) -> int:
+    """Длина строки в UTF-16 code units (Telegram использует это для entity offsets)."""
+    return len(s.encode("utf-16-le")) // 2
+
+
+async def _vacancy_delay(n: int):
+    """Задержка перед n-й вакансией (n от 1 до 5, для 6+ используется 5-я)."""
+    idx = min(n, 5) - 1
+    key = VACANCY_DELAY_KEYS[idx]
+    default = VACANCY_DELAY_DEFAULTS[idx]
+    sec = float(await get_setting(key, default))
+    if sec > 0:
+        await asyncio.sleep(sec)
+
 import json
 import random
 import asyncio
@@ -102,7 +122,7 @@ async def ask_experience(message: types.Message, state: FSMContext):
 async def process_experience(message: types.Message, state: FSMContext):
     await state.update_data(experience=message.text)
     data = await state.get_data()
-    
+
     # Start imitation of analysis with animation
     anim_analysis = FSInputFile("images/analys.gif")
     analysis_msg = await message.answer_animation(
@@ -122,19 +142,19 @@ async def process_experience(message: types.Message, state: FSMContext):
         except Exception:
             pass
 
-    loading_min = float(await get_setting("delay_loading_min", "0.7"))
-    loading_max = float(await get_setting("delay_loading_max", "1.2"))
+    duration = float(await get_setting("delay_loading_duration", "3"))
+    step = max(0.3, duration / 3)
     text_1 = await get_setting("text_loading_1", "📊 Сравниваю с 2 000+ вакансиями…")
     text_2 = await get_setting("text_loading_2", "💰 Считаю твой потенциал…")
 
-    await asyncio.sleep(random.uniform(loading_min, loading_max))
+    await asyncio.sleep(step)
     await safe_edit_caption(analysis_msg, text_1)
 
-    await asyncio.sleep(random.uniform(loading_min, loading_max))
+    await asyncio.sleep(step)
     await safe_edit_caption(analysis_msg, text_2)
 
-    await asyncio.sleep(random.uniform(loading_min, loading_max))
-    
+    await asyncio.sleep(step)
+
     # Calculate Result (Placeholder logic for now)
     base_salary = 80000
     if "IT" in data['sphere']: base_salary = 120000
@@ -223,9 +243,6 @@ async def show_vacancies(callback: types.CallbackQuery):
             pass
         await callback.answer()
 
-        vac_delay_min = float(await get_setting("delay_vacancy_min", "1.5"))
-        vac_delay_max = float(await get_setting("delay_vacancy_max", "3.0"))
-
         vacancy_intro = await get_setting(
             "text_vacancy_intro",
             "🔎 Нашёл {count} подходящих вакансий выше твоей текущей планки.\n\n"
@@ -246,27 +263,38 @@ async def show_vacancies(callback: types.CallbackQuery):
             await callback.message.answer(intro)
 
             for i, post in enumerate(posts, 1):
-                await asyncio.sleep(random.uniform(vac_delay_min, vac_delay_max))
+                await _vacancy_delay(i)
                 prefix = f"📌 {i}. "
                 text_with_num = prefix + post.text
                 entities = []
                 if post.entities_json:
+                    prefix_utf16 = _utf16_len(prefix)
                     for e in [MessageEntity.model_validate(x) for x in json.loads(post.entities_json)]:
                         d = e.model_dump()
-                        d["offset"] = e.offset + len(prefix)
+                        d["offset"] = e.offset + prefix_utf16
                         entities.append(MessageEntity.model_validate(d))
                 if post.content_type == "photo":
-                    await callback.message.bot.send_photo(
-                        chat_id=callback.message.chat.id,
-                        photo=post.photo_file_id,
-                        caption=text_with_num,
-                        caption_entities=entities if entities else None,
-                    )
+                    try:
+                        await callback.message.bot.send_photo(
+                            chat_id=callback.message.chat.id,
+                            photo=post.photo_file_id,
+                            caption=text_with_num,
+                            caption_entities=entities if entities else None,
+                        )
+                    except TelegramBadRequest:
+                        await callback.message.bot.send_photo(
+                            chat_id=callback.message.chat.id,
+                            photo=post.photo_file_id,
+                            caption=text_with_num,
+                        )
                 else:
-                    await callback.message.answer(
-                        text_with_num,
-                        entities=entities if entities else None,
-                    )
+                    try:
+                        await callback.message.answer(
+                            text_with_num,
+                            entities=entities if entities else None,
+                        )
+                    except TelegramBadRequest:
+                        await callback.message.answer(text_with_num)
 
             back_builder = InlineKeyboardBuilder()
             back_builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))

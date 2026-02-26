@@ -1,5 +1,4 @@
 from aiogram import Router, types, F
-from typing import Optional, Tuple
 import secrets
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -336,132 +335,120 @@ async def process_contact_link(message: types.Message, state: FSMContext):
 
 # --- Delays Management ---
 
-FUNNEL_DELAY_KEYS = [
-    ("delay_funnel_1", "1-е сообщение"),
-    ("delay_funnel_2", "2-е сообщение"),
-    ("delay_funnel_3", "3-е сообщение"),
-    ("delay_funnel_4", "4-е сообщение"),
-    ("delay_funnel_5", "5-е сообщение"),
+VACANCY_DELAY_KEYS = [
+    ("delay_vacancy_1", "1-я вакансия"),
+    ("delay_vacancy_2", "2-я вакансия"),
+    ("delay_vacancy_3", "3-я вакансия"),
+    ("delay_vacancy_4", "4-я вакансия"),
+    ("delay_vacancy_5", "5-я вакансия"),
 ]
-FUNNEL_DELAY_DEFAULTS = ["0", "10", "20", "50", "60"]
+VACANCY_DELAY_DEFAULTS = ["0", "10", "20", "50", "60"]
 
 
 def _format_delay_sec(sec: float) -> str:
-    """Форматирует секунды: 90 -> '1мин 30сек', 60 -> '1мин', 10 -> '10сек'."""
-    sec = int(sec)
-    if sec >= 60:
-        m, s = divmod(sec, 60)
-        return f"{m}мин {s}сек" if s else f"{m}мин"
-    return f"{sec}сек"
+    """Форматирует секунды: 90 -> '1 мин 30 сек', 60 -> '1 мин', 10 -> '10 сек'."""
+    s = int(sec)
+    if s >= 60:
+        m, r = divmod(s, 60)
+        return f"{m} мин {r} сек" if r else f"{m} мин"
+    return f"{s} сек"
 
 
 @router.message(F.text == "⏱ Задержки")
 async def admin_delays(message: types.Message):
     if not is_admin(message.from_user.id): return
-    loading_min = await get_setting("delay_loading_min", "0.7")
-    loading_max = await get_setting("delay_loading_max", "1.2")
-    vacancy_min = await get_setting("delay_vacancy_min", "0.5")
-    vacancy_max = await get_setting("delay_vacancy_max", "1.5")
 
-    funnel_lines = []
-    for (key, label), default in zip(FUNNEL_DELAY_KEYS, FUNNEL_DELAY_DEFAULTS):
+    delay_loading_duration = await get_setting("delay_loading_duration", "3")
+    try:
+        loading_sec = float(delay_loading_duration)
+    except ValueError:
+        loading_sec = 3
+
+    vacancy_lines = []
+    for (key, label), default in zip(VACANCY_DELAY_KEYS, VACANCY_DELAY_DEFAULTS):
         val = await get_setting(key, default)
         try:
             sec = float(val)
-            funnel_lines.append(f"{label}: {_format_delay_sec(sec)}")
+            vacancy_lines.append(f"🔹 {label} — {_format_delay_sec(sec)}")
         except ValueError:
-            funnel_lines.append(f"{label}: {val}")
+            vacancy_lines.append(f"🔹 {label} — {val}")
 
     builder = InlineKeyboardBuilder()
-    builder.row(types.InlineKeyboardButton(text="✏️ Задержки загрузки (min-max сек)", callback_data="admin_edit_loading_delays"))
-    builder.row(types.InlineKeyboardButton(text="✏️ Пауза перед вакансиями (min-max сек)", callback_data="admin_edit_vacancy_delays"))
-    for i, (key, label) in enumerate(FUNNEL_DELAY_KEYS):
-        val = await get_setting(key, FUNNEL_DELAY_DEFAULTS[i])
+    builder.row(types.InlineKeyboardButton(
+        text=f"GIF поиска — {_format_delay_sec(loading_sec)}",
+        callback_data="admin_edit_delay_loading_duration"
+    ))
+    for i, (key, label) in enumerate(VACANCY_DELAY_KEYS):
+        val = await get_setting(key, VACANCY_DELAY_DEFAULTS[i])
+        try:
+            v_sec = float(val)
+        except ValueError:
+            v_sec = 0
         builder.row(types.InlineKeyboardButton(
-            text=f"⏰ {label} — {_format_delay_sec(float(val) if val.replace('.','').isdigit() else 0)}",
-            callback_data=f"admin_edit_funnel_{key}"
+            text=f"🔹 {label} — {_format_delay_sec(v_sec)}",
+            callback_data=f"admin_edit_vacancy_delay_{key}"
         ))
     await message.answer(
-        f"⏱ Текущие задержки (секунды):\n\n"
-        f"Загрузка (анимация): {loading_min} - {loading_max}\n"
-        f"Перед показом вакансий: {vacancy_min} - {vacancy_max}\n\n"
-        f"📩 Задержки между сообщениями воронки:\n" + "\n".join(funnel_lines),
+        "⏱️ НАСТРОЙКИ ЗАДЕРЖЕК\n\n"
+        f"🖼  GIF поиска: {loading_sec:.1f} сек\n\n"
+        "⏳ Интервалы между вакансиями:\n" + "\n".join(vacancy_lines),
         reply_markup=builder.as_markup()
     )
 
-@router.callback_query(F.data == "admin_edit_loading_delays")
-async def start_edit_loading_delays(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer(
-        "Введите min и max для загрузки через пробел (например: 0.5 1.5):",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state(EditDelaysStates.waiting_for_loading_delays)
-    await callback.answer()
 
-@router.callback_query(F.data == "admin_edit_vacancy_delays")
-async def start_edit_vacancy_delays(callback: types.CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "admin_edit_delay_loading_duration")
+async def start_edit_delay_loading_duration(callback: types.CallbackQuery, state: FSMContext):
+    current = await get_setting("delay_loading_duration", "3")
     await callback.message.answer(
-        "Введите min и max для паузы перед вакансиями через пробел (например: 0.5 1.5):",
+        f"Длительность анализа (сколько идёт гифка)\n\n"
+        f"Текущее значение: {current} сек\n\n"
+        f"Введите длительность в секундах (например: 3 или 5):",
         reply_markup=get_cancel_keyboard()
     )
-    await state.set_state(EditDelaysStates.waiting_for_vacancy_delays)
+    await state.set_state(EditDelaysStates.waiting_for_delay_loading_duration)
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("admin_edit_funnel_"))
-async def start_edit_funnel_delay(callback: types.CallbackQuery, state: FSMContext):
-    key = callback.data.replace("admin_edit_funnel_", "")
-    label = next((lbl for k, lbl in FUNNEL_DELAY_KEYS if k == key), key)
-    default = next((d for (k, _), d in zip(FUNNEL_DELAY_KEYS, FUNNEL_DELAY_DEFAULTS) if k == key), "0")
+@router.callback_query(F.data.startswith("admin_edit_vacancy_delay_"))
+async def start_edit_vacancy_delay(callback: types.CallbackQuery, state: FSMContext):
+    key = callback.data.replace("admin_edit_vacancy_delay_", "")
+    label = next((lbl for k, lbl in VACANCY_DELAY_KEYS if k == key), key)
+    default = next((d for (k, _), d in zip(VACANCY_DELAY_KEYS, VACANCY_DELAY_DEFAULTS) if k == key), "0")
     current = await get_setting(key, default)
-    await state.update_data(edit_funnel_key=key, edit_funnel_label=label)
+    await state.update_data(edit_vacancy_delay_key=key, edit_vacancy_delay_label=label)
     await callback.message.answer(
-        f"⏰ Задержка для «{label}»\n\n"
+        f"Задержка перед «{label}»\n\n"
         f"Текущее значение: {current} сек\n\n"
         f"Введите задержку в секундах (например: 10 или 1.5):",
         reply_markup=get_cancel_keyboard()
     )
-    await state.set_state(EditDelaysStates.waiting_for_funnel_delay)
+    await state.set_state(EditDelaysStates.waiting_for_vacancy_delay)
     await callback.answer()
 
 
-def _parse_delays(text: str) -> Optional[Tuple[float, float]]:
-    parts = text.strip().split()
-    if len(parts) != 2:
-        return None
+@router.message(EditDelaysStates.waiting_for_delay_loading_duration)
+async def process_delay_loading_duration(message: types.Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Отменено.", reply_markup=get_admin_keyboard())
+        return
     try:
-        a, b = float(parts[0]), float(parts[1])
-        if a < 0 or b < 0:
-            return None
-        return (min(a, b), max(a, b))
+        sec = float(message.text.strip().replace(",", "."))
+        if sec < 0:
+            raise ValueError("Отрицательное значение")
     except ValueError:
-        return None
-
-@router.message(EditDelaysStates.waiting_for_loading_delays)
-async def process_loading_delays(message: types.Message, state: FSMContext):
-    parsed = _parse_delays(message.text)
-    if not parsed:
-        await message.answer("❌ Введите два числа через пробел (например: 0.5 1.5):")
+        await message.answer("❌ Введите число (секунды), например: 3 или 5")
         return
-    await set_setting("delay_loading_min", str(parsed[0]))
-    await set_setting("delay_loading_max", str(parsed[1]))
-    await message.answer(f"✅ Задержки загрузки обновлены: {parsed[0]} - {parsed[1]} сек", reply_markup=get_admin_keyboard())
-    await state.clear()
-
-@router.message(EditDelaysStates.waiting_for_vacancy_delays)
-async def process_vacancy_delays(message: types.Message, state: FSMContext):
-    parsed = _parse_delays(message.text)
-    if not parsed:
-        await message.answer("❌ Введите два числа через пробел (например: 0.5 1.5):")
-        return
-    await set_setting("delay_vacancy_min", str(parsed[0]))
-    await set_setting("delay_vacancy_max", str(parsed[1]))
-    await message.answer(f"✅ Пауза перед вакансиями обновлена: {parsed[0]} - {parsed[1]} сек", reply_markup=get_admin_keyboard())
+    await set_setting("delay_loading_duration", str(sec))
+    await message.answer(
+        f"✅ Длительность анализа обновлена: {_format_delay_sec(sec)}",
+        reply_markup=get_admin_keyboard()
+    )
     await state.clear()
 
 
-@router.message(EditDelaysStates.waiting_for_funnel_delay)
-async def process_funnel_delay(message: types.Message, state: FSMContext):
+@router.message(EditDelaysStates.waiting_for_vacancy_delay)
+async def process_vacancy_delay(message: types.Message, state: FSMContext):
     if message.text == "❌ Отмена":
         await state.clear()
         await message.answer("Отменено.", reply_markup=get_admin_keyboard())
@@ -474,8 +461,8 @@ async def process_funnel_delay(message: types.Message, state: FSMContext):
         await message.answer("❌ Введите число (секунды), например: 10 или 1.5")
         return
     data = await state.get_data()
-    key = data.get("edit_funnel_key")
-    label = data.get("edit_funnel_label", "сообщение")
+    key = data.get("edit_vacancy_delay_key")
+    label = data.get("edit_vacancy_delay_label", "вакансия")
     if key:
         await set_setting(key, str(sec))
         await message.answer(

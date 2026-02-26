@@ -9,9 +9,8 @@ class EditSettingsStates(StatesGroup):
 
 
 class EditDelaysStates(StatesGroup):
-    waiting_for_loading_delays = State()
-    waiting_for_vacancy_delays = State()
-    waiting_for_funnel_delay = State()
+    waiting_for_delay_loading_duration = State()
+    waiting_for_vacancy_delay = State()
 
 
 class EditTextsStates(StatesGroup):
