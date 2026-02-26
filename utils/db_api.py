@@ -93,13 +93,14 @@ async def add_vacancy(**kwargs):
 
 # --- VacancyPost (post-based vacancies) ---
 
-async def add_vacancy_post(content_type: str, text: str, entities_json: str = None, photo_file_id: str = None):
+async def add_vacancy_post(content_type: str, text: str, entities_json: str = None, photo_file_id: str = None, reply_markup_json: str = None):
     async with async_session() as session:
         post = VacancyPost(
             content_type=content_type,
             text=text,
             entities_json=entities_json,
             photo_file_id=photo_file_id,
+            reply_markup_json=reply_markup_json,
         )
         session.add(post)
         await session.commit()

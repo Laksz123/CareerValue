@@ -103,7 +103,7 @@ async def admin_del_post(callback: types.CallbackQuery):
 @router.callback_query(F.data == "admin_add_vacancy")
 async def start_add_vacancy(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(
-        "Отправьте пост вакансии (текст, фото, ссылки, цитаты — всё сохранится как есть):",
+        "Отправьте пост вакансии (текст, фото, ссылки, кнопки — всё сохранится как есть):",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(AdminStates.waiting_for_vacancy_post)
@@ -132,33 +132,42 @@ async def process_vacancy_post(message: types.Message, state: FSMContext):
 
     photo_file_id = message.photo[-1].file_id if message.photo else None
 
+    reply_markup_json = None
+    if message.reply_markup and hasattr(message.reply_markup, "inline_keyboard") and message.reply_markup.inline_keyboard:
+        reply_markup_json = message.reply_markup.model_dump_json()
+
     await add_vacancy_post(
         content_type=content_type,
         text=text,
         entities_json=entities_json,
         photo_file_id=photo_file_id,
+        reply_markup_json=reply_markup_json,
     )
 
     await message.answer("Сохранено. Ниже пост, как бот будет его отправлять:", reply_markup=get_admin_keyboard())
     await state.clear()
 
-    # Preview: send copy of the post
+    # Preview: send copy of the post (with buttons if any)
     try:
         await message.send_copy(chat_id=message.chat.id)
     except (TypeError, Exception):
+        from aiogram.types import InlineKeyboardMarkup
         entities_list = [MessageEntity.model_validate(e) for e in json.loads(entities_json or "[]")]
+        markup = InlineKeyboardMarkup.model_validate_json(reply_markup_json) if reply_markup_json else None
         if content_type == "photo":
             await message.bot.send_photo(
                 chat_id=message.chat.id,
                 photo=photo_file_id,
                 caption=text,
                 caption_entities=entities_list,
+                reply_markup=markup,
             )
         else:
             await message.bot.send_message(
                 chat_id=message.chat.id,
                 text=text,
                 entities=entities_list,
+                reply_markup=markup,
             )
 
 # --- Broadcast Flow ---

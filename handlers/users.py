@@ -2,7 +2,7 @@ from aiogram import Router, types, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
-from aiogram.types import FSInputFile, InputMediaPhoto, MessageEntity
+from aiogram.types import FSInputFile, InputMediaPhoto, MessageEntity, InlineKeyboardMarkup
 from utils.states import QuizStates
 from utils.db_api import get_or_create_user, update_user_survey, get_vacancy_posts, get_setting
 from typing import Set, Tuple
@@ -273,6 +273,12 @@ async def show_vacancies(callback: types.CallbackQuery):
                         d = e.model_dump()
                         d["offset"] = e.offset + prefix_utf16
                         entities.append(MessageEntity.model_validate(d))
+                markup = None
+                if post.reply_markup_json:
+                    try:
+                        markup = InlineKeyboardMarkup.model_validate_json(post.reply_markup_json)
+                    except Exception:
+                        pass
                 if post.content_type == "photo":
                     try:
                         await callback.message.bot.send_photo(
@@ -280,21 +286,24 @@ async def show_vacancies(callback: types.CallbackQuery):
                             photo=post.photo_file_id,
                             caption=text_with_num,
                             caption_entities=entities if entities else None,
+                            reply_markup=markup,
                         )
                     except TelegramBadRequest:
                         await callback.message.bot.send_photo(
                             chat_id=callback.message.chat.id,
                             photo=post.photo_file_id,
                             caption=text_with_num,
+                            reply_markup=markup,
                         )
                 else:
                     try:
                         await callback.message.answer(
                             text_with_num,
                             entities=entities if entities else None,
+                            reply_markup=markup,
                         )
                     except TelegramBadRequest:
-                        await callback.message.answer(text_with_num)
+                        await callback.message.answer(text_with_num, reply_markup=markup)
 
             back_builder = InlineKeyboardBuilder()
             back_builder.row(types.InlineKeyboardButton(text="🏠 Вернуться в главное меню", callback_data="back_to_main"))

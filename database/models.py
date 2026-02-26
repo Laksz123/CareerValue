@@ -42,6 +42,7 @@ class VacancyPost(Base):
     text = Column(String, nullable=False)
     entities_json = Column(String, nullable=True)
     photo_file_id = Column(String, nullable=True)
+    reply_markup_json = Column(String, nullable=True)  # InlineKeyboardMarkup
 
 
 class Setting(Base):
